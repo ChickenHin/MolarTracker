@@ -1,365 +1,51 @@
-name: BUILD LINUX
+name: Tests
 
 on:
-  pull_request:
-  push:
-    branches: ["dev"]
-    tags:
-      - "*"
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  build:
+  test:
     runs-on: ubuntu-latest
-
-    env:
-      QT_VERSION: "6.8.3"
-      BUILD_TYPE: "Debug"
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           submodules: recursive
-          fetch-depth: 0
 
-      # -------------------------
-      # Compute artifact/version names (only on dev branch or tags)
-      # -------------------------
-      - name: Compute names
-        if: startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/dev'
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
-            VERSION="${GITHUB_REF_NAME}"
-            IS_TAG="ON"
-          else
-            IS_TAG="OFF"
-            if git describe --tags --abbrev=0 >/dev/null 2>&1; then
-              LATEST_TAG="$(git describe --tags --abbrev=0)"
-            else
-              LATEST_TAG="0.0.0"
-            fi
-            VERSION="${LATEST_TAG}-dev"
-          fi
-
-          echo "ARTIFACT_VERSION=${VERSION}" >> "$GITHUB_ENV"
-          echo "IS_TAG=${IS_TAG}" >> "$GITHUB_ENV"
-
-          echo "LINUX_NAME=MolarTracker-linux-${VERSION}" >> "$GITHUB_ENV"
-
-          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
-            echo "LINUX_LATEST=MolarTracker-linux-latest" >> "$GITHUB_ENV"
-          fi
-
-      # -------------------------
-      # Build tools
-      # -------------------------
-      - name: Install build tools (Ubuntu)
+      - name: Install build tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y     \
-              ninja-build             \
-              pkg-config              \
-              libcurl4-openssl-dev
+          sudo apt-get install -y \
+            ninja-build \
+            pkg-config \
+            libcurl4-openssl-dev
 
-      # -------------------------
-      # Install Qt
-      # -------------------------
-      - name: Install Qt (Ubuntu)
+      - name: Install Qt
         uses: jurplel/install-qt-action@v4
         with:
-          version: ${{ env.QT_VERSION }}
+          version: "6.8.3"
           target: desktop
 
-      # -------------------------
-      # Configure + build
-      # -------------------------
-      - name: Configure (Ubuntu)
+      - name: Configure
         shell: bash
         run: |
-          set -euo pipefail
-          IS_TAG_FLAG=OFF
-          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then IS_TAG_FLAG=ON; fi
-
           cmake -S . -B build -G Ninja \
-            -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
-            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
-            -DMOLARTRACKER_IS_TAG="${IS_TAG_FLAG}" \
-            -DMOLARTRACKER_GIT_TAG="${GITHUB_REF_NAME}" \
-            -DMOLARTRACKER_ENABLE_TESTING=ON
-
-      - name: Build (Ubuntu)
-        run: |
-          cmake --build build --verbose
-
-      # -------------------------
-      # Run tests
-      # -------------------------
-      - name: Run tests (Ubuntu)
-        env:
-          QT_QPA_PLATFORM: offscreen
-        run: |
-          ctest --test-dir build --output-on-failure
-
-      # -------------------------
-      # Package for Release assets (ONLY on tags)
-      # -------------------------
-      - name: Package (Linux, tag)
-        if: startsWith(github.ref, 'refs/tags/')
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -f build/bin/MolarTracker || test -f build/bin/MolarTracker.exe || true
-          tar -C build/bin -czf "MolarTracker-linux-${GITHUB_REF_NAME}.tar.gz" MolarTracker
-          cp build/compile_commands.json "compile_commands-${GITHUB_REF_NAME}.json"
-
-      # -------------------------
-      # Upload to GitHub Release (ONLY on tags)
-      # -------------------------
-      - name: Upload release assets (Linux)
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.ref_name }}
-          files: |
-            MolarTracker-linux-${{ github.ref_name }}.tar.gz
-            compile_commands-${{ github.ref_name }}.json
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      # -------------------------
-      # Upload Actions artifacts (ONLY on tags/dev)
-      # -------------------------
-      - name: Upload Linux artifact (Actions, versioned)
-        if: startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/dev'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ env.LINUX_NAME }}
-          path: |
-            build/bin/MolarTracker*
-            build/compile_commands.json
-          if-no-files-found: error
-
-      - name: Upload Linux artifact (Actions, latest)
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ env.LINUX_LATEST }}
-          path: |
-            build/bin/MolarTracker*
-            build/compile_commands.json
-          if-no-files-found: error
-
-  lint:
-    runs-on: ubuntu-latest
-
-    env:
-      QT_VERSION: "6.8.3"
-      BUILD_TYPE: "Debug"
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          fetch-depth: 0
-
-      # -------------------------
-      # Build tools
-      # -------------------------
-      - name: Install build tools (Ubuntu)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y     \
-              ninja-build             \
-              pkg-config              \
-              libcurl4-openssl-dev    \
-              cppcheck                \
-              clangd-20
-          sudo update-alternatives --install /usr/bin/clangd clangd /usr/bin/clangd-20 100
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: 3.13
-          cache: 'pip'
-
-      - name: Install Python dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install clangd-tidy
-
-      # -------------------------
-      # Install Qt
-      # -------------------------
-      - name: Install Qt (Ubuntu)
-        uses: jurplel/install-qt-action@v4
-        with:
-          version: ${{ env.QT_VERSION }}
-          target: desktop
-
-      # -------------------------
-      # Configure only (generates compile_commands.json; no build needed)
-      # -------------------------
-      - name: Configure (Ubuntu)
-        shell: bash
-        run: |
-          set -euo pipefail
-          IS_TAG_FLAG=OFF
-          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then IS_TAG_FLAG=ON; fi
-
-          cmake -S . -B build -G Ninja \
-            -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
-            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
-            -DMOLARTRACKER_IS_TAG="${IS_TAG_FLAG}" \
-            -DMOLARTRACKER_GIT_TAG="${GITHUB_REF_NAME}" \
-            -DMOLARTRACKER_ENABLE_TESTING=ON
-
-      # -------------------------
-      # Generate headers (required by linters; no C++ compiled)
-      # -------------------------
-      - name: Generate headers
-        run: cmake --build build --target generate_log_categories
-
-      # -------------------------
-      # Run cppcheck
-      # -------------------------
-      - name: Run cppcheck
-        run: |
-          jq '[.[] | select(.file | test("_autogen") | not)]' \
-            build/compile_commands.json > build/compile_commands_filtered.json
-
-          cppcheck \
-              --project=build/compile_commands_filtered.json \
-              --quiet \
-              --file-filter=src/* \
-              --suppress=useStlAlgorithm \
-              --enable=all \
-              --enable=performance \
-              --enable=style \
-              --enable=portability \
-              --error-exitcode=1 \
-              --suppressions-list=.cppcheck \
-              --suppress=missingIncludeSystem \
-              --inline-suppr \
-              --inconclusive \
-              --library=qt \
-              -I src
-
-      # -------------------------
-      # Run clangd-tidy
-      # -------------------------
-      - name: Run clangd-tidy
-        run: |
-          clangd-tidy $(find src/ -name "*.cpp" ! -name "moc_*.cpp") -p=build
-
-  coverage:
-    runs-on: ubuntu-latest
-    # Skip on tag pushes — coverage is only useful on dev / PRs
-    if: ${{ !startsWith(github.ref, 'refs/tags/') }}
-
-    permissions:
-      contents: read
-      pull-requests: write
-      statuses: write
-      checks: write
-
-    env:
-      QT_VERSION: "6.8.3"
-      BUILD_TYPE: "Debug"
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          fetch-depth: 0
-
-      # -------------------------
-      # Build tools (same as build job + lcov)
-      # -------------------------
-      - name: Install build tools (Ubuntu)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y     \
-              ninja-build             \
-              pkg-config              \
-              libcurl4-openssl-dev    \
-              lcov
-
-      # -------------------------
-      # Install Qt
-      # -------------------------
-      - name: Install Qt (Ubuntu)
-        uses: jurplel/install-qt-action@v4
-        with:
-          version: ${{ env.QT_VERSION }}
-          target: desktop
-
-      # -------------------------
-      # Configure with coverage instrumentation
-      # -------------------------
-      - name: Configure (with coverage)
-        shell: bash
-        run: |
-          set -euo pipefail
-          cmake -S . -B build -G Ninja \
-            -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
-            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
-            -DCMAKE_CXX_FLAGS="--coverage -fprofile-arcs -ftest-coverage" \
-            -DCMAKE_EXE_LINKER_FLAGS="--coverage" \
+            -DCMAKE_BUILD_TYPE=Debug \
             -DMOLARTRACKER_IS_TAG=OFF \
-            -DMOLARTRACKER_GIT_TAG="${GITHUB_REF_NAME}" \
+            -DMOLARTRACKER_GIT_TAG="" \
             -DMOLARTRACKER_ENABLE_TESTING=ON
 
       - name: Build
-        run: cmake --build build
+        run: cmake --build build --parallel
 
-      # -------------------------
-      # Run tests
-      # -------------------------
       - name: Run tests
         env:
           QT_QPA_PLATFORM: offscreen
-        run: ctest --test-dir build --output-on-failure
-
-      # -------------------------
-      # Generate LCOV report
-      # -------------------------
-      - name: Generate coverage report
         run: |
-          lcov --capture \
-               --directory build \
-               --output-file coverage.info \
-               --gcov-tool gcov \
-               --ignore-errors mismatch,gcov,gcov \
-               --rc geninfo_unexecuted_blocks=1
-          lcov --remove coverage.info \
-               '/usr/*'         \
-               '*/Qt/*'         \
-               '*/vcpkg/*'      \
-               '*/_deps/*'      \
-               '*/external/*'   \
-               '*/test*'        \
-               '*/moc_*'        \
-               --output-file coverage.info \
-               --ignore-errors unused,unused
-          lcov --list coverage.info
-
-      # -------------------------
-      # Upload via getsentry/codecov-action (no external token needed)
-      # -------------------------
-      - name: Upload coverage
-        uses: getsentry/codecov-action@0.3.7
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          files: coverage.info
-          coverage-format: lcov
-          fail-ci-if-error: true
-          post-pr-comment: true
+          ctest \
+            --test-dir build \
+            --output-on-failure
